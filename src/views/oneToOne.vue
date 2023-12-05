@@ -8,22 +8,47 @@
       </div>
       <var-button style="margin-top: 10px;float: right;" type="primary" @click="init">加入房间</var-button>
     </div>
-    <video ref="localVideoRef"></video>
-    
+
+    <div>
+      <div>
+        <div>本地：</div>
+        <video ref="localVideoRef" width="500"></video>
+      </div>
+
+      <div v-for="(item) in otherUserList" :key="item.userId">
+        <div>{{ item.nickName }}:</div>
+        <var-button style="margin-top: 10px;" type="primary" @click="call(item)">发起通话</var-button>
+        <video ref="remoteVideoRef" width="500"></video>
+      </div>
+    </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { io } from "socket.io-client";
 import { v4 as uuidv4 } from 'uuid';
+import { $msg } from '../utils/js/message.js'
 
 var localVideoRef = ref()
+var remoteVideoRef = ref()
+
 var userId = uuidv4()
 var nickName = ref('')
 var roomId = ref('')
 var ServerUrl = 'ws://localhost:18080'
 var socket = ref()
 var userInfo = ref({})
+var roomList = ref([]) // 房间里的所有用户
+var localRtcPc = ref()
+var remoteRtcPc = ref()
+var channel = ref()
+
+// 一个计算属性 ref
+const otherUserList = computed(() => {
+  return roomList.value.filter(v => v.userId !== userId)
+})
+
+
 var log = console.log
 
 function getShareSqeenStream() {
@@ -32,7 +57,11 @@ function getShareSqeenStream() {
   })
 }
 
-function init() {
+async function init() {
+  if(!nickName.value) {
+    return 
+  }
+
   userInfo.value = {
     userId: userId,
     nickName: nickName.value,
@@ -49,31 +78,118 @@ function init() {
   })
 
   socket.value.on('connect', (e) => {
-    log('socket connect success', socket.value)
+
   })
 
-  socket.value.on('msg', (msg) => {
-    console.log(msg)
+  socket.value.on('roomUserList', data => {
+    roomList.value = data
   })
 
+  socket.value.on('call', data => {
+    initCalleeInfo(userId, data.userId)
+  })
+
+  socket.value.on('msg', (data) => {
+    if(data['type'] === 'join' || data['type'] === 'leave') {
+      $msg('success', data.msg)
+      socket.value.emit("roomUserList", { roomId: roomId.value })
+    }
+
+    if(data['type'] === 'offer') {
+      onRemoteOffer(data.data.userId, data.data.offer)
+    }
+
+    if(data['type'] === 'answer') {
+      onRemoteAnswer(data.data.userId, data.data.answer)
+    }
+
+    if(data['type'] === 'candidate') {
+      localRtcPc.value.addIceCandidate(data.data.candidate)
+    }
+  })
+
+  
+}
+// 发起通话
+function call(item) {
+  initCallerInfo(userId, item.userId)
+  let params = {targetUid: item.userId, userId}
+  socket.value.emit('call', params)
 }
 
-// 获取参数
-function getParams(queryName) {
-  let url = window.location.href
-  let query = decodeURI(url.split('?')[1])
-  let vars = query.split('&')
-  for (var i = 0; i < vars.length; i++) {
-    var pair = vars[i].split('=')
-    if (pair[0] === queryName) {
-      return pair[1]
+async function initCallerInfo(callerId, calleeId) {
+  localRtcPc.value = new RTCPeerConnection()
+  // 获取本地媒体流
+  let stream = await getShareSqeenStream()
+
+  for(const s of stream.getTracks()) {
+    localRtcPc.value.addTrack(s)
+  }
+
+  // 设置本地媒体流
+  setVideoStream(localVideoRef, stream)
+
+  // 回调监听
+  onPcEvent(localRtcPc.value, callerId, calleeId)
+
+  // 创建offer
+  let offer = await localRtcPc.value.createOffer()
+
+  // 设置offer本地描述
+  await localRtcPc.value.setLocalDescription(offer)
+
+  // 发送offer给被呼叫端
+  let params = {
+    targetUid: calleeId,
+    userId: callerId,
+    offer: offer
+  }
+  socket.value.emit('offer', params)
+}
+
+async function initCalleeInfo(localUid, remoteUid) {
+  localRtcPc.value = new RTCPeerConnection()
+  // 获取本地媒体流
+  let stream = await getShareSqeenStream()
+
+  for(const s of stream.getTracks()) {
+    localRtcPc.value.addTrack(s)
+  }
+
+  // 设置本地媒体流
+  setVideoStream(localVideoRef, stream)
+
+  // 回调监听
+  onPcEvent(localRtcPc.value, localUid, remoteUid)
+}
+
+function onPcEvent(pc, localUid, remoteUid) {
+  channel.value = pc.createDataChannel("chat")
+  // 设置远端媒体流
+  pc.ontrack = function(event) {
+    setVideoStream(remoteVideoRef, event.track)
+  }
+
+  pc.onnegotiationneeded = function(e) {
+    log('重新协商', e)
+  }
+
+  pc.ondatachannel = function(e) {
+    log('datachannel 创建成功!', e)
+  }
+
+  // 创建icecandidate
+  pc.onicecandidate = function(e) {
+    if(e.candidate) {
+      socket.value.emit('candidate', {targetUid: remoteUid, userId: localUid, candidate: e.candidate})
+    }else{
+      log('此次协商中，没有更多的候选')
     }
   }
-  return null
 }
 
 // 设置本地媒体流
-function setDomVideoStream(domId, newStream) {
+function setVideoStream(domId, newStream) {
   let video = domId.value
   let stream = video.srcObject
   if (stream) {
@@ -84,13 +200,36 @@ function setDomVideoStream(domId, newStream) {
       stream.removeTrack()
     })
   }
+  video.srcObject = newStream
+	video.muted = true
+  video.play()
 }
 
-// 设置远程媒体流
+// 接到offer
+async function onRemoteOffer(fromUid, offer) {
+    await localRtcPc.value.setRemoteDescription(offer)
+    // 创建answer
+    let answer = await localRtcPc.value.createAnswer()
+    
+    // 设置localDescription
+    await localRtcPc.value.setLocalDescription(answer)
+
+    // 将answer发送给fromUid
+    let params = {targetUid: fromUid, userId, answer}
+    socket.value.emit('answer', params)
+}
+
+// 接到answer
+async function onRemoteAnswer(fromUid, answer) {
+  await localRtcPc.value.setRemoteDescription(answer)
+}
+
+
 </script>
 
 <style lang="less" scoped>
 .iptContainer {
   width: 300px;
+  overflow: hidden;
 }
 </style>
