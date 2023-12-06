@@ -18,19 +18,20 @@
       <div v-for="(item) in otherUserList" :key="item.userId">
         <div>{{ item.nickName }}:</div>
         <var-button style="margin-top: 10px;" type="primary" @click="call(item)">发起通话</var-button>
-        <video ref="remoteVideoRef" width="500"></video>
+        <video id="remoteVideoRef" width="500"></video>
       </div>
     </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, computed } from 'vue'
 import { io } from "socket.io-client";
 import { v4 as uuidv4 } from 'uuid';
 import { $msg } from '../utils/js/message.js'
 
 var localVideoRef = ref()
 var remoteVideoRef = ref()
+var flag = ref(false)
 
 var userId = uuidv4()
 var nickName = ref('')
@@ -40,8 +41,8 @@ var socket = ref()
 var userInfo = ref({})
 var roomList = ref([]) // 房间里的所有用户
 var localRtcPc = ref()
-var remoteRtcPc = ref()
 var channel = ref()
+let delayFn = []
 
 // 一个计算属性 ref
 const otherUserList = computed(() => {
@@ -78,25 +79,35 @@ async function init() {
   })
 
   socket.value.on('connect', (e) => {
-
+    log('连接成功')
   })
 
   socket.value.on('roomUserList', data => {
     roomList.value = data
   })
 
-  socket.value.on('call', data => {
-    initCalleeInfo(userId, data.userId)
-  })
+  let setRemoteDelay = function(){}
 
-  socket.value.on('msg', (data) => {
+  socket.value.on('msg',(data) => {
     if(data['type'] === 'join' || data['type'] === 'leave') {
       $msg('success', data.msg)
       socket.value.emit("roomUserList", { roomId: roomId.value })
     }
 
+    if(data['type'] === 'call') {
+      initCalleeInfo(userId, data.data.userId).then(() => {
+        setRemoteDelay()
+      })
+    }
+
     if(data['type'] === 'offer') {
-      onRemoteOffer(data.data.userId, data.data.offer)
+      if(flag.value) {
+        onRemoteOffer(data.data.userId, data.data.offer)
+      }else{
+        setRemoteDelay = () => {
+          onRemoteOffer(data.data.userId, data.data.offer)
+        }
+      }
     }
 
     if(data['type'] === 'answer') {
@@ -104,7 +115,14 @@ async function init() {
     }
 
     if(data['type'] === 'candidate') {
-      localRtcPc.value.addIceCandidate(data.data.candidate)
+      if(localRtcPc.value.remoteDescription) {
+        localRtcPc.value.addIceCandidate(data.data.candidate)
+      }else{
+        delayFn.push(() => {
+          localRtcPc.value.addIceCandidate(data.data.candidate)
+        })
+      }
+          
     }
   })
 
@@ -119,9 +137,10 @@ function call(item) {
 
 async function initCallerInfo(callerId, calleeId) {
   localRtcPc.value = new RTCPeerConnection()
+    // 回调监听
+    onPcEvent(localRtcPc.value, callerId, calleeId)
   // 获取本地媒体流
   let stream = await getShareSqeenStream()
-
   for(const s of stream.getTracks()) {
     localRtcPc.value.addTrack(s)
   }
@@ -129,8 +148,7 @@ async function initCallerInfo(callerId, calleeId) {
   // 设置本地媒体流
   setVideoStream(localVideoRef, stream)
 
-  // 回调监听
-  onPcEvent(localRtcPc.value, callerId, calleeId)
+
 
   // 创建offer
   let offer = await localRtcPc.value.createOffer()
@@ -149,9 +167,12 @@ async function initCallerInfo(callerId, calleeId) {
 
 async function initCalleeInfo(localUid, remoteUid) {
   localRtcPc.value = new RTCPeerConnection()
+
+    // 回调监听
+    onPcEvent(localRtcPc.value, localUid, remoteUid)
+
   // 获取本地媒体流
   let stream = await getShareSqeenStream()
-
   for(const s of stream.getTracks()) {
     localRtcPc.value.addTrack(s)
   }
@@ -159,23 +180,22 @@ async function initCalleeInfo(localUid, remoteUid) {
   // 设置本地媒体流
   setVideoStream(localVideoRef, stream)
 
-  // 回调监听
-  onPcEvent(localRtcPc.value, localUid, remoteUid)
+  flag.value = true
 }
 
 function onPcEvent(pc, localUid, remoteUid) {
   channel.value = pc.createDataChannel("chat")
   // 设置远端媒体流
   pc.ontrack = function(event) {
-    setVideoStream(remoteVideoRef, event.track)
+    setRemoteVideoStream('remoteVideoRef', event.track)
   }
 
   pc.onnegotiationneeded = function(e) {
-    log('重新协商', e)
+    log('重新协商')
   }
 
   pc.ondatachannel = function(e) {
-    log('datachannel 创建成功!', e)
+    log('datachannel 创建成功!')
   }
 
   // 创建icecandidate
@@ -205,9 +225,27 @@ function setVideoStream(domId, newStream) {
   video.play()
 }
 
+// 设置远端媒体流
+function setRemoteVideoStream(domId, track) {
+  let video = document.getElementById(domId)
+  let stream = video.srcObject
+  if(stream){
+    stream.addTrack(track)
+  }else{
+    let newStream = new MediaStream()
+    newStream.addTrack(track)
+    video.srcObject =newStream
+    video.muted = true
+    video.play()
+  }
+}
+
 // 接到offer
 async function onRemoteOffer(fromUid, offer) {
     await localRtcPc.value.setRemoteDescription(offer)
+    delayFn.forEach(v => {
+      v()
+    })
     // 创建answer
     let answer = await localRtcPc.value.createAnswer()
     
