@@ -13,6 +13,13 @@
       <div>
         <div>本地：</div>
         <video ref="localVideoRef" width="500"></video>
+        <div>
+          <var-button type="primary" @click="changeMedia">切换</var-button>
+        </div>
+        <div>
+          <var-input v-model="chatIpt"></var-input>
+          <var-button type="success" @click="sendChat">发送信息</var-button>
+        </div>
       </div>
 
       <div v-for="(item) in otherUserList" :key="item.userId">
@@ -43,6 +50,7 @@ var roomList = ref([]) // 房间里的所有用户
 var localRtcPc = ref()
 var channel = ref()
 let delayFn = []
+let chatIpt = ref('')
 
 // 一个计算属性 ref
 const otherUserList = computed(() => {
@@ -194,8 +202,17 @@ function onPcEvent(pc, localUid, remoteUid) {
     log('重新协商')
   }
 
-  pc.ondatachannel = function(e) {
+  pc.ondatachannel = function(ev) {
     log('datachannel 创建成功!')
+    ev.channel.onopen = function() {
+        console.log('Data channel ------------open----------------');
+      };
+      ev.channel.onmessage = function(data) {
+        console.log('Data channel ------------msg----------------',data);
+      };
+      ev.channel.onclose = function() {
+        console.log('Data channel ------------close----------------');
+      };
   }
 
   // 创建icecandidate
@@ -262,6 +279,27 @@ async function onRemoteAnswer(fromUid, answer) {
   await localRtcPc.value.setRemoteDescription(answer)
 }
 
+// 切换分享流
+async function changeMedia() {
+  const senders = localRtcPc.value.getSenders()
+  console.log(senders)
+  let stream = await getShareSqeenStream()
+  const [videoTrack] = stream.getVideoTracks()
+  const send = senders.find(s => s.track.kind === 'video')
+  send.replaceTrack(videoTrack)
+  let oldStream = localVideoRef.value.srcObject
+  for(const s of oldStream.getTracks()) {
+    s.stop()
+  }
+  localVideoRef.value.srcObject = stream
+  localVideoRef.value.play()
+}
+
+// 通过信道发送信息
+function sendChat() {
+  console.log('已发送')
+  channel.value.send(chatIpt.value)
+}
 
 </script>
 
