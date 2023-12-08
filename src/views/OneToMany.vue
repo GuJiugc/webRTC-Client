@@ -1,0 +1,355 @@
+<template>
+    <div class="container">
+      <header class="header">
+      OneToMany 直播
+    </header>
+    <div class="iptContainer">
+      <div>
+        <var-input placeholder="请输入昵称" v-model="nickName" clearable/>
+      </div>
+      <div>
+        <var-input placeholder="请输入房间号" v-model="roomId" clearable/>
+      </div>
+      <div>
+        <var-radio-group v-model="userType">
+          <var-radio :checked-value="0">学生</var-radio>
+          <var-radio :checked-value="1">老师</var-radio>
+        </var-radio-group>
+      </div>
+      <var-button type="warning" v-if="userType == 1" @click="publishScreen">开播</var-button>
+      <var-button style="margin-top: 10px;float: right;" type="primary" @click="init">加入房间</var-button>
+    </div>
+    <div>
+      <div>
+        直播画面:
+      </div>
+      <video ref="videoRef" width="500"></video>
+    </div>
+    <div>
+      <div>学生列表:</div>
+      <var-table>
+        <thead>
+          <tr>
+            <th>userId</th>
+            <th>昵称</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr  v-for="item in studentList" :key="item.userId">
+            <td>{{ item.userId }}</td>
+            <td>{{ item.nickName }}</td>
+          </tr>
+        </tbody>
+      </var-table>
+    </div>
+    
+    <div>
+      <div>消息列表</div>
+    </div>
+    </div>
+</template>
+
+<script setup>
+import { ref, computed } from 'vue'
+import { io } from "socket.io-client";
+import { v4 as uuidv4 } from 'uuid';
+import { $msg } from '../utils/js/message.js'
+
+var videoRef = ref()
+
+var userId = uuidv4()
+var nickName = ref('')
+var roomId = ref('')
+var ServerUrl = 'ws://localhost:18080'
+var socket = ref()
+var userInfo = ref({})
+var roomList = ref([]) // 房间里的所有用户
+var channel = ref()
+let chatIpt = ref('')
+let userType = ref(0) // 默认类型为 学生，老师只能有一个
+let localRtcPcList = new Map()
+let channelList = new Map()
+let screenStream = null
+
+// 一个计算属性 ref
+const studentList = computed(() => {
+  return roomList.value.filter(v => v.userType != 1 && v.userId != userId)
+})
+
+const teacherInfo = computed(() => {
+  return roomList.value.filter(v => v.userType == 1)[0]
+})
+
+
+var log = console.log
+
+function getShareSqeenStream() {
+  return navigator.mediaDevices.getDisplayMedia({
+    audio: true
+  })
+}
+
+async function init() {
+  if(!nickName.value) {
+    return 
+  }
+
+  userInfo.value = {
+    userId: userId,
+    nickName: nickName.value,
+    roomId: roomId.value,
+    userType: userType.value
+  }
+
+  socket.value = io(ServerUrl, {
+		reconnectionDelayMax: 10000, // 重连超时时间
+    query: {
+      userId,
+      roomId: roomId.value,
+      nickName: nickName.value,
+      userType: userType.value
+    }
+  })
+
+  socket.value.on('connect', (e) => {
+    log('连接成功')
+  })
+
+  socket.value.on('roomUserList', data => {
+    roomList.value = data
+  })
+
+  socket.value.on('msg',(data) => {
+    if(data['type'] === 'join' || data['type'] === 'leave') {
+      $msg('success', data.msg)
+      socket.value.emit("roomUserList", { roomId: roomId.value })
+      if(data['type'] === 'leave') {
+        if(teacherInfo.value && teacherInfo.value.userId) {
+          localRtcPcList.delete(teacherInfo.value.userId + '-' + data.data.userId)
+          channelList.delete(teacherInfo.value.userId + '-' + data.data.userId)
+        }
+      }
+    }
+
+    // 学生端接到offer，处理
+    if(data['type'] === 'offer') {
+      console.log(data)
+      onRemoteOffer(data.data.teaUid, data.data.stuUid, data.data.offer)
+    }
+
+    // 教师端接到answer，处理
+    if(data['type'] === 'answer') {
+      onRemoteAnswer(data.data.teaUid, data.data.stuUid, data.data.answer)
+    }
+
+    // 双方接到candidate
+    if(data['type'] === 'candidate') {
+        if(userType.value == 1) {
+          let stuUid = data.data.userId
+          localRtcPcList.get(userId + '-' + stuUid).addIceCandidate(data.data.candidate)
+        }else{
+          console.log(teacherInfo.value.userId)
+          localRtcPcList.get(teacherInfo.value.userId + '-' + userId).addIceCandidate(data.data.candidate)
+        }
+      }
+  })
+
+  
+}
+
+// 开播
+async function publishScreen() {
+  // 获取本地媒体流
+  screenStream = await getShareSqeenStream()
+
+  // 设置本地媒体流
+  setVideoStream(videoRef, screenStream)
+
+  for(var i = 0;i < studentList.value.length;i++) {
+    initPublisherInfo(userId, studentList.value[i].userId)
+  }
+}
+
+// 初始化开播rtc
+async function initPublisherInfo(teaUid, stuUid) {
+  if(localRtcPcList.has(teaUid + '-' + stuUid)) {
+    return
+  }
+  let lrtc = new RTCPeerConnection()
+  localRtcPcList.set(teaUid + '-' + stuUid, lrtc)
+
+  // 回调监听
+  onPcEvent(lrtc, teaUid, stuUid)
+
+  for(const s of screenStream.getTracks()) {
+    lrtc.addTrack(s)
+  }
+
+  // 存储rtc
+
+   // 创建offer
+  let offer = await lrtc.createOffer()
+
+  // 设置offer本地描述
+  await lrtc.setLocalDescription(offer)
+
+  // 发送offer给被呼叫端
+  let params = {
+    stuUid,
+    teaUid,
+    offer
+  }
+  socket.value.emit('offer', params)
+}
+
+async function onPcEvent(pc, teaUid, stuUid) {
+  if(!channelList.has(teaUid + '-' + stuUid)) {
+    let channel = await pc.createDataChannel(teaUid + '-' + stuUid)
+    channelList.set(teaUid + '-' + stuUid, channel)
+  }
+  
+  // 设置远端媒体流
+  pc.ontrack = function(event) {
+    setRemoteVideoStream(videoRef, event.track)
+  }
+
+  pc.onnegotiationneeded = function(e) {
+    log('重新协商')
+  }
+
+  pc.ondatachannel = function(ev) {
+    log('datachannel 创建成功!')
+    ev.channel.onopen = function() {
+        console.log('Data channel ------------open----------------');
+      };
+      ev.channel.onmessage = function(data) {
+        console.log('Data channel ------------msg----------------',data);
+      };
+      ev.channel.onclose = function() {
+        console.log('Data channel ------------close----------------');
+      };
+  }
+
+  // 创建icecandidate
+  pc.onicecandidate = function(e) {
+    if(e.candidate) {
+      if(userType.value == 1) {
+        studentList.value.forEach(stu => {
+          socket.value.emit('candidate', {targetUid: stu.userId, userId: userId, candidate: e.candidate})
+        })
+      }else{
+        if(teacherInfo.value.userId) {
+          socket.value.emit('candidate', {targetUid: teacherInfo.value.userId, userId: userId, candidate: e.candidate})
+        }
+      }
+    }else{
+      log('此次协商中，没有更多的候选')
+    }
+  }
+}
+
+// 设置本地媒体流
+function setVideoStream(domId, newStream) {
+  let video = domId.value
+  let stream = video.srcObject
+  if (stream) {
+    stream.getAudioTracks().forEach((e) => {
+      stream.removeTrack()
+    })
+    stream.getVideoTracks().forEach((e) => {
+      stream.removeTrack()
+    })
+  }
+  video.srcObject = newStream
+  video.play()
+}
+
+// 设置远端媒体流
+function setRemoteVideoStream(domId, track) {
+  let video = domId.value
+  let stream = video.srcObject
+  if(stream){
+    stream.addTrack(track)
+  }else{
+    let newStream = new MediaStream()
+    newStream.addTrack(track)
+    video.srcObject =newStream
+    video.play()
+  }
+}
+
+// 学生端接到offer
+async function onRemoteOffer(teaUid, stuUid, offer) {
+    let lrtc = new RTCPeerConnection()
+
+      // 设置只接收不发送
+    lrtc.addTransceiver('audio', { direction: 'recvonly' })
+    lrtc.addTransceiver('video', { direction: 'recvonly' })
+
+    localRtcPcList.set(teaUid + '-' + stuUid, lrtc)
+
+    // 回调监听
+    onPcEvent(lrtc, teaUid, stuUid)
+
+    await lrtc.setRemoteDescription(offer)
+
+    // 创建answer
+    let answer = await lrtc.createAnswer()
+    
+    // 设置localDescription
+    await lrtc.setLocalDescription(answer)
+
+
+    // 将answer发送给fromUid
+    let params = {teaUid, stuUid, answer}
+    socket.value.emit('answer', params)
+}
+
+// 接到answer
+async function onRemoteAnswer(teaUid, stuUid, answer) {
+    let lrtc = localRtcPcList.get(teaUid + '-' + stuUid)
+    if(lrtc) {
+      await lrtc.setRemoteDescription(answer)
+    }
+}
+
+// 切换分享流
+// async function changeMedia() {
+//   const senders = localRtcPc.value.getSenders()
+//   console.log(senders)
+//   let stream = await getShareSqeenStream()
+//   const [videoTrack] = stream.getVideoTracks()
+//   const send = senders.find(s => s.track.kind === 'video')
+//   send.replaceTrack(videoTrack)
+//   let oldStream = videoRef.value.srcObject
+//   for(const s of oldStream.getTracks()) {
+//     s.stop()
+//   }
+//   videoRef.value.srcObject = stream
+//   videoRef.value.play()
+// }
+
+// 通过信道发送信息
+function sendChat() {
+  console.log('已发送')
+  channel.value.send(chatIpt.value)
+}
+
+</script>
+
+<style lang="less" scoped>
+.container {
+  width: 800px;
+  margin: auto;
+}
+.iptContainer {
+  width: 300px;
+  overflow: hidden;
+}
+
+.header {
+  font-size: 18px;
+  font-weight: 700;
+  text-align: center;
+}
+</style>

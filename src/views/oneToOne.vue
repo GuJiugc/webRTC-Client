@@ -30,7 +30,7 @@
     </div>
 </template>
 
-<script setup lang="ts">
+<script setup>
 import { ref, computed } from 'vue'
 import { io } from "socket.io-client";
 import { v4 as uuidv4 } from 'uuid';
