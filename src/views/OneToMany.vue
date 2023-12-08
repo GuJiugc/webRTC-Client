@@ -23,9 +23,12 @@
       <div>
         直播画面:
       </div>
-      <video ref="videoRef" width="500"></video>
+      <video style="border: 1px solid #ccc;border-radius: 10px;margin: 10px;" ref="videoRef" width="500"></video>
     </div>
-    <div>
+    <div v-if="userType == 1">
+      <var-button type="info" @click="changeMedia">切换分享流</var-button>
+    </div>
+    <div class="itemContainer">
       <div>学生列表:</div>
       <var-table>
         <thead>
@@ -43,17 +46,25 @@
       </var-table>
     </div>
     
-    <div>
+    <div class="itemContainer" v-if="isPublist">
       <div>消息列表</div>
+      <div class="barrageInput">
+        <var-input v-model="chatIpt" style="width: 200px;" placeholder="请输入"></var-input>
+        <var-button text outline type="primary" @click="sendChat">发送</var-button>
+      </div>
+      <div class="barrageBox">
+        <div class="barrageItem" v-for="(item,index) in barrageList" :key="index">{{ item }}</div>
+      </div>
     </div>
-    </div>
+  </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { io } from "socket.io-client";
 import { v4 as uuidv4 } from 'uuid';
 import { $msg } from '../utils/js/message.js'
+import { reactive } from 'vue';
 
 var videoRef = ref()
 
@@ -64,12 +75,13 @@ var ServerUrl = 'ws://localhost:18080'
 var socket = ref()
 var userInfo = ref({})
 var roomList = ref([]) // 房间里的所有用户
-var channel = ref()
 let chatIpt = ref('')
 let userType = ref(0) // 默认类型为 学生，老师只能有一个
 let localRtcPcList = new Map()
 let channelList = new Map()
 let screenStream = null
+let isPublist = ref(false)
+let barrageList = reactive([])
 
 // 一个计算属性 ref
 const studentList = computed(() => {
@@ -79,7 +91,13 @@ const studentList = computed(() => {
 const teacherInfo = computed(() => {
   return roomList.value.filter(v => v.userType == 1)[0]
 })
-
+watch(studentList, (newList) => {
+  if(userType.value == 1 && isPublist.value) {
+    for(var i = 0;i < newList.length;i++) {
+      initPublisherInfo(userId, newList[i].userId)
+    }
+  }
+})
 
 var log = console.log
 
@@ -152,6 +170,19 @@ async function init() {
           localRtcPcList.get(teacherInfo.value.userId + '-' + userId).addIceCandidate(data.data.candidate)
         }
       }
+
+     if(data['type'] === 'teacherClose') {
+        videoRef.value.srcObject = null
+     } 
+
+     if(data['type'] === 'sendChat') {
+      for(var i = 0;i < studentList.value.length;i++) {
+        let stuUid = studentList.value[i].userId
+        let channel = channelList.get(userId + '-' + stuUid)
+        channel.send(data.msg)
+      }
+      barrageList.push(data.msg)
+     }
   })
 
   
@@ -164,6 +195,9 @@ async function publishScreen() {
 
   // 设置本地媒体流
   setVideoStream(videoRef, screenStream)
+
+  // 修改为开播状态
+  isPublist.value = true
 
   for(var i = 0;i < studentList.value.length;i++) {
     initPublisherInfo(userId, studentList.value[i].userId)
@@ -224,6 +258,7 @@ async function onPcEvent(pc, teaUid, stuUid) {
       };
       ev.channel.onmessage = function(data) {
         console.log('Data channel ------------msg----------------',data);
+        barrageList.push(data.data)
       };
       ev.channel.onclose = function() {
         console.log('Data channel ------------close----------------');
@@ -252,6 +287,9 @@ async function onPcEvent(pc, teaUid, stuUid) {
 function setVideoStream(domId, newStream) {
   let video = domId.value
   let stream = video.srcObject
+  newStream.getVideoTracks()[0].addEventListener('ended', () => {
+    socket.value.emit('teacherClose')
+  });
   if (stream) {
     stream.getAudioTracks().forEach((e) => {
       stream.removeTrack()
@@ -281,6 +319,9 @@ function setRemoteVideoStream(domId, track) {
 // 学生端接到offer
 async function onRemoteOffer(teaUid, stuUid, offer) {
     let lrtc = new RTCPeerConnection()
+
+    // 修改为开播状态
+    isPublist.value = true
 
       // 设置只接收不发送
     lrtc.addTransceiver('audio', { direction: 'recvonly' })
@@ -314,25 +355,36 @@ async function onRemoteAnswer(teaUid, stuUid, answer) {
 }
 
 // 切换分享流
-// async function changeMedia() {
-//   const senders = localRtcPc.value.getSenders()
-//   console.log(senders)
-//   let stream = await getShareSqeenStream()
-//   const [videoTrack] = stream.getVideoTracks()
-//   const send = senders.find(s => s.track.kind === 'video')
-//   send.replaceTrack(videoTrack)
-//   let oldStream = videoRef.value.srcObject
-//   for(const s of oldStream.getTracks()) {
-//     s.stop()
-//   }
-//   videoRef.value.srcObject = stream
-//   videoRef.value.play()
-// }
+async function changeMedia() {
+  let stream = await getShareSqeenStream()
+  stream.getVideoTracks()[0].addEventListener('ended', () => {
+    socket.value.emit('teacherClose')
+  });
+  for(var i = 0;i < studentList.value.length;i++) {
+    let stuId = studentList.value[i].userId
+    let lrtc = localRtcPcList.get(userId + '-' + stuId)
+    const senders = lrtc.getSenders()
+    const [videoTrack] = stream.getVideoTracks()
+    const send = senders.find(s => s.track.kind === 'video')
+    send.replaceTrack(videoTrack)
+  }
+  
+  let oldStream = videoRef.value.srcObject
+  for(const s of oldStream.getTracks()) {
+    s.stop()
+  }
+  videoRef.value.srcObject = stream
+  videoRef.value.play()
+}
 
 // 通过信道发送信息
 function sendChat() {
-  console.log('已发送')
-  channel.value.send(chatIpt.value)
+  let params = {
+    teaUid: teacherInfo.value.userId,
+    msg: nickName.value + ': ' + chatIpt.value
+  }
+  socket.value.emit('sendChat', params)
+  chatIpt.value = ''
 }
 
 </script>
@@ -351,5 +403,21 @@ function sendChat() {
   font-size: 18px;
   font-weight: 700;
   text-align: center;
+}
+
+.itemContainer {
+  margin-top: 20px;
+}
+
+.barrageInput {
+  width: 300px;
+  display: flex;
+  align-items: center;
+}
+.barrageBox {
+  max-height: 300px;
+  .barrageItem {
+    line-height: 1.5;
+  }
 }
 </style>
