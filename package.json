@@ -10,6 +10,7 @@
     "format": "prettier --write src/"
   },
   "dependencies": {
+    "@mediapipe/selfie_segmentation": "^0.1.1675465747",
     "@varlet/ui": "^2.19.3",
     "socket.io-client": "^4.7.2",
     "uuid": "^9.0.1",
