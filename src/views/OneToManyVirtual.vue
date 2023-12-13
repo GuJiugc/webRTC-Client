@@ -31,6 +31,8 @@
     </div>
     <div v-if="userType == 1">
       <var-button type="info" @click="changeMedia">切换分享流</var-button>
+      <var-button type="info" @click="changeMediaVirtual">切换虚拟流</var-button>
+      <var-button @click="stopAnimate">stop</var-button>
     </div>
     <div class="itemContainer">
       <div>学生列表:</div>
@@ -93,6 +95,8 @@ let selfieSegmentation = null
 let image = null
 let canvasElement = null
 let canvasCtx = null
+let virtualStream = null
+let rqId = null
 
 // 一个计算属性 ref
 const studentList = computed(() => {
@@ -204,8 +208,8 @@ async function publishScreen() {
   // 获取本地媒体流
   screenStream = await getShareSqeenStream()
 
-  // 设置算法处理监听器
-  virtualBg()
+   // 设置算法处理监听器
+   virtualStream = await virtualBg()
 
   // 设置本地媒体流
   setVideoStream(videoRef, screenStream)
@@ -391,6 +395,23 @@ async function changeMedia() {
   videoRef.value.play()
 }
 
+// 切换虚拟流
+async function changeMediaVirtual() {
+  let stream = virtualStream
+  stream.getVideoTracks()[0].addEventListener('ended', () => {
+    socket.value.emit('teacherClose')
+  });
+  for(var i = 0;i < studentList.value.length;i++) {
+    let stuId = studentList.value[i].userId
+    let lrtc = localRtcPcList.get(userId + '-' + stuId)
+    const senders = lrtc.getSenders()
+    const [videoTrack] = stream.getVideoTracks()
+    const send = senders.find(s => s.track.kind === 'video')
+    send.replaceTrack(videoTrack)
+  }
+}
+
+
 // 通过信道发送信息
 function sendChat() {
   let params = {
@@ -406,6 +427,7 @@ function initVb(){
     canvasElement = document.getElementById('output_canvas');
     canvasCtx = canvasElement.getContext('2d');
     image = new Image();
+    image.crossOrigin = 'anonymous'
     image.src = 'http://127.0.0.1:8080/backgrond.png'
     selfieSegmentation = new SFS.SelfieSegmentation({locateFile: (file) => {
             console.log(file);
@@ -444,22 +466,23 @@ onMounted(() => {
  */
  async function virtualBg(){
         let video = videoRef.value
-        video.addEventListener('playing',function(){
-                let myvideo = this;
-                let lastTime = new Date();
-                async function getFrames() {
-                        const now = myvideo.currentTime;
-                        if(now > lastTime){
-                                await selfieSegmentation.send({image: myvideo});
-                        }
-                        lastTime = now;
-                        //无限定时循环 退出记得取消 cancelAnimationFrame() 
-                        requestAnimationFrame(getFrames);
-                };
-                getFrames()
-        })
+        let lastTime = new Date();
+        async function getFrames() {
+                const now = video.currentTime;
+                if(now > lastTime){
+                        await selfieSegmentation.send({image: video});
+                }
+                lastTime = now;
+                //无限定时循环 退出记得取消 cancelAnimationFrame() 
+                rqId = requestAnimationFrame(getFrames);
+        };
+        getFrames()
+        return canvasElement.captureStream(25)
 }
 
+function stopAnimate() {
+  cancelAnimationFrame(rqId)
+}
 
 
 </script>
