@@ -23,11 +23,14 @@
       <div>
         直播画面:
       </div>
-      <video style="border: 1px solid #ccc;border-radius: 10px;margin: 10px;" ref="videoRef" width="500"></video>
-      <div>
+      <div style="position: relative;" >
+        <video style="border: 1px solid #ccc;border-radius: 10px;margin: 10px;" ref="videoRef" width="500" height="300"></video>
+        <div style="width: 500px;height: 300px;position: absolute;left: 0;bottom: 0;" ref="videoRefCanvasRef"></div>
+      </div>
+      <div v-show="userType == 1">
         算法处理后画面:
       </div>
-      <canvas  id="output_canvas" class="output_canvas" style="width: 768px;height: 480px;"></canvas>
+      <canvas v-show="userType == 1" id="output_canvas" class="output_canvas" style="width: 768px;height: 480px;"></canvas>
     </div>
     <div v-if="userType == 1">
       <var-button type="info" @click="changeMedia">切换分享流</var-button>
@@ -72,6 +75,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { $msg } from '../utils/js/message.js'
 import { reactive } from 'vue';
 import * as SFS from '@mediapipe/selfie_segmentation'
+import Danmaku from 'danmaku';
+import { nextTick } from 'vue';
 
 var videoRef = ref()
 
@@ -97,6 +102,29 @@ let canvasElement = null
 let canvasCtx = null
 let virtualStream = null
 let rqId = null
+let danmaku = ref(null)
+let videoRefCanvasRef = ref(null)
+
+nextTick(() => {
+  danmaku.value = new Danmaku({
+  // 必填。用于显示弹幕的「舞台」会被添加到该容器中。
+  container: videoRefCanvasRef.value,
+
+  // 预设的弹幕数据数组，在媒体模式中使用。在 emit API 中有说明格式。
+  comments: [],
+
+  engine: 'canvas',
+
+  speed: 30,
+
+  mode: 'rtl',
+  
+  style: {
+    fontSize: '18px',
+    color: '#000'
+  }
+});
+})
 
 // 一个计算属性 ref
 const studentList = computed(() => {
@@ -197,6 +225,9 @@ async function init() {
         channel.send(data.msg)
       }
       barrageList.push(data.msg)
+      danmaku.value.emit({
+        text: data.msg,
+      })
      }
   })
 
@@ -277,6 +308,10 @@ async function onPcEvent(pc, teaUid, stuUid) {
       ev.channel.onmessage = function(data) {
         console.log('Data channel ------------msg----------------',data);
         barrageList.push(data.data)
+
+        danmaku.value.emit({
+          text: data.data,
+        })
       };
       ev.channel.onclose = function() {
         console.log('Data channel ------------close----------------');
