@@ -18,7 +18,7 @@
         <div>本地：</div>
         <video ref="localVideoRef" width="500"></video>
         <div>
-          <!-- <var-button type="primary" @click="changeMedia">切换</var-button> -->
+          <var-button type="primary" @click="changeMedia">切换</var-button>
         </div>
         <div>
           <var-input v-model="chatIpt"></var-input>
@@ -55,10 +55,17 @@ var channel = ref()
 let chatIpt = ref('')
 let localStream = null
 let meetingUserMap = new Map()
-
-onMounted(() => {
-  initLocalStream()
-})
+let pendPromise = null
+function getStreamPromise() {
+  if(!pendPromise) {
+    pendPromise = new Promise((resolve,reject) => {
+      initLocalStream().then(() => {
+        resolve()
+      })
+    })
+  } 
+  return pendPromise
+}
 
 const selfUserInfo = computed(() => {
   return roomList.value.find(v => v.userId === userId)
@@ -69,10 +76,11 @@ const otherUserList = computed(() => {
   return roomList.value.filter(v => v.userId !== userId)
 })
 
-watch(otherUserList, (val) => {
+watch(otherUserList, async (val) => {
+  await getStreamPromise()
+
   for(var i = 0;i < val.length;i++) {
     if(val[i].joinTime > selfUserInfo.value.joinTime) {
-      console.log(777)
       initLocalRTC(userId, val[i].userId)
     }
   }
@@ -134,8 +142,8 @@ async function init() {
 
     if(data['type'] === 'candidate') {
         log('candidate')
-      let lrtc = meetingUserMap.get(userId + '-' + data.data.userId)
-      lrtc.addIceCandidate(data.data.candidate)
+          let lrtc = meetingUserMap.get(userId + '-' + data.data.userId)
+          lrtc.addIceCandidate(data.data.candidate)
     }
   })
 
@@ -179,36 +187,6 @@ async function initLocalRTC(localUid, remoteUid) {
   socket.value.emit('offer', params)
 }
 
-async function initCallerInfo(callerId, calleeId) {
-  localRtcPc.value = new RTCPeerConnection()
-    // 回调监听
-    onPcEvent(localRtcPc.value, callerId, calleeId)
-  // 获取本地媒体流
-  let stream = await getShareSqeenStream()
-  for(const s of stream.getTracks()) {
-    localRtcPc.value.addTrack(s)
-  }
-
-  // 设置本地媒体流
-  setVideoStream(localVideoRef, stream)
-
-  // 创建offer
-  let offer = await localRtcPc.value.createOffer()
-
-  // 设置offer本地描述
-  await localRtcPc.value.setLocalDescription(offer)
-
-  // 发送offer给被呼叫端
-  let params = {
-    targetUid: calleeId,
-    userId: callerId,
-    offer: offer
-  }
-  socket.value.emit('offer', params)
-}
-
-
-
 function onPcEvent(pc, localUid, remoteUid) {
   // channel.value = pc.createDataChannel("chat")
   // 设置远端媒体流
@@ -236,6 +214,7 @@ function onPcEvent(pc, localUid, remoteUid) {
   // 创建icecandidate
   pc.onicecandidate = function(e) {
     if(e.candidate) {
+  log('onicecandidate-candidate')
       socket.value.emit('candidate', {targetUid: remoteUid, userId: localUid, candidate: e.candidate})
     }else{
       log('此次协商中，没有更多的候选')
@@ -282,13 +261,16 @@ async function onRemoteOffer(fromUid, offer) {
 
     meetingUserMap.set(userId + '-' + fromUid, lrtc)
 
+    await getStreamPromise()
+
     // 回调监听
     onPcEvent(lrtc, userId, fromUid)
+
 
     for(const s of localStream.getTracks()) {
       lrtc.addTrack(s)
     }
-
+  log('description-offer')
     await lrtc.setRemoteDescription(offer)
     // 创建answer
     let answer = await lrtc.createAnswer()
@@ -304,22 +286,26 @@ async function onRemoteOffer(fromUid, offer) {
 // 接到answer
 async function onRemoteAnswer(fromUid, answer) {
   let lrtc = meetingUserMap.get(userId + '-' + fromUid)
+  log('description-answer')
   await lrtc.setRemoteDescription(answer)
 }
 
 // 切换分享流
 async function changeMedia() {
-  const senders = localRtcPc.value.getSenders()
   let stream = await getShareSqeenStream()
-  const [videoTrack] = stream.getVideoTracks()
-  const send = senders.find(s => s.track.kind === 'video')
-  send.replaceTrack(videoTrack)
   let oldStream = localVideoRef.value.srcObject
   for(const s of oldStream.getTracks()) {
     s.stop()
   }
   localVideoRef.value.srcObject = stream
   localVideoRef.value.play()
+  for(var i = 0;i < otherUserList.value.length;i++) {
+    let lrtc = meetingUserMap.get(userId + '-' + otherUserList.value[i].userId)
+    const senders = lrtc.getSenders()
+    const [videoTrack] = stream.getVideoTracks()
+    const send = senders.find(s => s.track.kind === 'video')
+    send.replaceTrack(videoTrack)
+  }
 }
 
 // 通过信道发送信息
