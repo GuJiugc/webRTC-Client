@@ -19,13 +19,16 @@
         <video ref="localVideoRef" width="500"></video>
         <div>
           <var-button type="primary" @click="changeMedia">切换</var-button>
+          <var-button type="danger" v-if="isRunning" @click="changeStreamStatus(false)">暂停</var-button>
+          <var-button type="warning" v-if="!isRunning" @click="changeStreamStatus(true)">继续</var-button>
+          <var-button type="primary" @click="showParamDia">视频属性设置</var-button>
         </div>
       </div>
       <div class="headerTit">会议列表</div>
       <div class="meetingContainer">
         <div class="meetingtItem" v-for="(item) in otherUserList" :key="item.userId">
           <div>{{ item.nickName }}:</div>
-          <video :id="item.userId + 'Ref'" width="300"></video>
+          <video @click="getRTCStreamParams(item.userId)" :id="item.userId + 'Ref'" width="300"></video>
         </div>
       </div>
 
@@ -40,6 +43,11 @@
           </div>
         </div>
     </div>
+
+    <var-dialog title="属性设置" v-model:show="dialogVisible" width="500px"
+    :cancel-button="false" @confirm="changeStreamParams">
+      <StreamParamsCom v-if="dialogVisible" ref="StreamParamsComRef" :streamParam="streamParam" />
+    </var-dialog>
   </div>
 </template>
 
@@ -48,6 +56,7 @@ import { ref, computed, watch, reactive } from 'vue'
 import { io } from "socket.io-client";
 import { v4 as uuidv4 } from 'uuid';
 import { $msg } from '../utils/js/message.js'
+import StreamParamsCom from '../components/streamParamsCom.vue'
 
 var localVideoRef = ref()
 
@@ -64,8 +73,14 @@ let meetingUserMap = new Map()
 let meetingChannelMap = new Map()
 let pendPromise = null
 let messageList = reactive([])
+let isRunning = ref(false) // 控制视频流的暂停与继续接通
+let dialogVisible = ref(false)
+let streamParam = ref({})
+let StreamParamsComRef = ref(null)
+
 function getStreamPromise() {
   if(!pendPromise) {
+    isRunning.value = true
     pendPromise = new Promise((resolve,reject) => {
       initLocalStream().then(() => {
         resolve()
@@ -320,6 +335,32 @@ async function changeMedia() {
   }
 }
 
+function changeStreamStatus(flag) {
+  isRunning.value = flag
+  for(var i = 0;i < otherUserList.value.length;i++) {
+    let lrtc = meetingUserMap.get(userId + '-' + otherUserList.value[i].userId)
+    const senders = lrtc.getSenders()
+    const send = senders.find(s => s.track.kind === 'video')
+    send.track.enabled = flag
+  }
+}
+
+function showParamDia() {
+  let videoTrack = localStream.getVideoTracks()[0]
+  streamParam.value = videoTrack.getSettings()
+  dialogVisible.value = true
+}
+
+async function changeStreamParams() {
+  for(var i = 0;i < otherUserList.value.length;i++) {
+    let lrtc = meetingUserMap.get(userId + '-' + otherUserList.value[i].userId)
+    const senders = lrtc.getSenders()
+    const send = senders.find(s => s.track.kind === 'video')
+    //强制约束
+    await send.track.applyConstraints(StreamParamsComRef.value.paramComputed);
+  }
+}
+
 // 通过信道发送信息
 function sendChat() {
   meetingChannelMap.forEach(channel => {
@@ -327,6 +368,14 @@ function sendChat() {
   })
   messageList.push(nickName.value + ':' + chatIpt.value)
   chatIpt.value = ''
+}
+
+function getRTCStreamParams(remoteId) {
+  let lrtc = meetingUserMap.get(userId + '-' + remoteId)
+  let senders = lrtc.getSenders()
+  let send = senders.find(s => s.track.kind === 'video')
+  let params = send.track.getSettings()
+  log(params)
 }
 
 </script>
@@ -373,5 +422,9 @@ function sendChat() {
   font-size: 18px;
   font-weight: 700;
   border-bottom: 1px solid #ccc;
+}
+
+.var-button {
+  margin-right: 10px;
 }
 </style>
