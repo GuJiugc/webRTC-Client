@@ -20,24 +20,31 @@
         <div>
           <var-button type="primary" @click="changeMedia">切换</var-button>
         </div>
-        <div>
-          <var-input v-model="chatIpt"></var-input>
-          <var-button type="success" @click="sendChat">发送信息</var-button>
-        </div>
       </div>
-
+      <div class="headerTit">会议列表</div>
       <div class="meetingContainer">
         <div class="meetingtItem" v-for="(item) in otherUserList" :key="item.userId">
           <div>{{ item.nickName }}:</div>
           <video :id="item.userId + 'Ref'" width="300"></video>
         </div>
       </div>
+
+      <div class="headerTit">消息列表</div>
+        <div class="sendMsgBox">
+          <var-input v-model="chatIpt" style="width: 300px;"></var-input>
+          <var-button type="success" @click="sendChat">发送信息</var-button>
+        </div>
+        <div class="messageContainer">
+          <div class="messageItem" v-for="(item, index) in messageList" :key="index">
+            {{ item }}
+          </div>
+        </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, reactive } from 'vue'
 import { io } from "socket.io-client";
 import { v4 as uuidv4 } from 'uuid';
 import { $msg } from '../utils/js/message.js'
@@ -51,11 +58,12 @@ var ServerUrl = 'ws://localhost:18080'
 var socket = ref()
 var userInfo = ref({})
 var roomList = ref([]) // 房间里的所有用户
-var channel = ref()
 let chatIpt = ref('')
 let localStream = null
 let meetingUserMap = new Map()
+let meetingChannelMap = new Map()
 let pendPromise = null
+let messageList = reactive([])
 function getStreamPromise() {
   if(!pendPromise) {
     pendPromise = new Promise((resolve,reject) => {
@@ -188,7 +196,10 @@ async function initLocalRTC(localUid, remoteUid) {
 }
 
 function onPcEvent(pc, localUid, remoteUid) {
-  // channel.value = pc.createDataChannel("chat")
+  if(!meetingChannelMap.has(localUid + '-' + remoteUid)) {
+    meetingChannelMap.set(localUid + '-' + remoteUid, pc.createDataChannel(localUid + '-' + remoteUid))
+
+  }
   // 设置远端媒体流
   pc.ontrack = function(event) {
     setRemoteVideoStream(remoteUid + 'Ref', event.track)
@@ -198,18 +209,19 @@ function onPcEvent(pc, localUid, remoteUid) {
     log('重新协商')
   }
 
-  // pc.ondatachannel = function(ev) {
-  //   log('datachannel 创建成功!')
-  //   ev.channel.onopen = function() {
-  //       console.log('Data channel ------------open----------------');
-  //     };
-  //     ev.channel.onmessage = function(data) {
-  //       console.log('Data channel ------------msg----------------',data);
-  //     };
-  //     ev.channel.onclose = function() {
-  //       console.log('Data channel ------------close----------------');
-  //     };
-  // }
+  pc.ondatachannel = function(ev) {
+    log('datachannel 创建成功!')
+    ev.channel.onopen = function() {
+        console.log('Data channel ------------open----------------');
+      };
+      ev.channel.onmessage = function(data) {
+        console.log('Data channel ------------msg----------------',data);
+        messageList.push(data.data)
+      };
+      ev.channel.onclose = function() {
+        console.log('Data channel ------------close----------------');
+      };
+  }
 
   // 创建icecandidate
   pc.onicecandidate = function(e) {
@@ -310,8 +322,11 @@ async function changeMedia() {
 
 // 通过信道发送信息
 function sendChat() {
-  console.log('已发送')
-  channel.value.send(chatIpt.value)
+  meetingChannelMap.forEach(channel => {
+    channel.send(nickName.value + ':' + chatIpt.value)
+  })
+  messageList.push(nickName.value + ':' + chatIpt.value)
+  chatIpt.value = ''
 }
 
 </script>
@@ -333,10 +348,30 @@ function sendChat() {
 }
 
 .meetingContainer {
+  min-height: 100px;
   display: flex;
   .meetingtItem {
     border: 1px solid black;
     padding: 10px;
   }
+}
+
+.sendMsgBox {
+  display: flex;
+  align-items: center;
+}
+
+.headerTit {
+  font-size: 18px;
+  font-weight: 700;
+}
+.messageContainer {
+  width: 400px;
+}
+.messageItem {
+  line-height: 2;
+  font-size: 18px;
+  font-weight: 700;
+  border-bottom: 1px solid #ccc;
 }
 </style>
