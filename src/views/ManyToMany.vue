@@ -22,12 +22,14 @@
           <var-button type="danger" v-if="isRunning" @click="changeStreamStatus(false)">暂停</var-button>
           <var-button type="warning" v-if="!isRunning" @click="changeStreamStatus(true)">继续</var-button>
           <var-button type="primary" @click="showParamDia">视频属性设置</var-button>
+          <var-button type="primary" @click="getStatsInfo">查看stats</var-button>
         </div>
       </div>
       <div class="headerTit">会议列表</div>
       <div class="meetingContainer">
         <div class="meetingtItem" v-for="(item) in otherUserList" :key="item.userId">
           <div>{{ item.nickName }}:</div>
+          <div>{{ item.bitrate }}</div>
           <video @click="getRTCStreamParams(item.userId)" :id="item.userId + 'Ref'" width="300"></video>
         </div>
       </div>
@@ -95,9 +97,11 @@ const selfUserInfo = computed(() => {
 })
 
 // 一个计算属性 ref
-const otherUserList = computed(() => {
-  return roomList.value.filter(v => v.userId !== userId)
-})
+const otherUserList = computed(() =>
+  {
+    return roomList.value.filter(v => v.userId !== userId)
+  }
+)
 
 watch(otherUserList, async (val) => {
   await getStreamPromise()
@@ -370,12 +374,71 @@ function sendChat() {
   chatIpt.value = ''
 }
 
+
 function getRTCStreamParams(remoteId) {
   let lrtc = meetingUserMap.get(userId + '-' + remoteId)
-  let senders = lrtc.getSenders()
-  let send = senders.find(s => s.track.kind === 'video')
-  let params = send.track.getSettings()
+  const receivers = lrtc.getReceivers();
+  const receive = receivers.find((s) => s.track.kind === 'video')
+  let params = receive.track.getSettings()
   log(params)
+}
+
+let statsTimerMap = new Map() // 用于存储定时获取带宽信息的定时器
+let lastPeerStatsMap = new Map() // 用于存储从rtc上获取的stats信息
+
+// 获取入口带宽，出口带宽，显示网络信息
+function getStatsInfo() {
+  otherUserList.value.forEach(u => {
+    let rtc = meetingUserMap.get(userId + '-' + u.userId)
+    if(rtc) {
+      getNetStats(u.userId, rtc)
+    }
+  })
+}
+
+function getNetStats(uid, pc) {
+  let timer = statsTimerMap.get(uid)
+  if(timer) {
+    clearInterval(timer)
+    statsTimerMap.delete(uid)
+  }else{
+    timer = setInterval(() => {
+      calculateReceiveBitrate(uid, pc)
+    }, 2000)
+    statsTimerMap.set(uid, timer)
+  }
+}
+
+function calculateReceiveBitrate(uid, pc) {
+  let lastResultForStats = lastPeerStatsMap.get(uid)
+  pc.getStats().then(res => {
+    res.forEach(report => {
+      let bytes;
+      let headerBytes;
+      let packets;
+
+      if(report.type === 'inbound-rtp' && report.kind === 'video') {
+        const now = report.timestamp;
+        bytes = report.bytesReceived;
+        headerBytes = report.headerBytesReceived;
+        packets = report.packetsReceived;
+
+        if(lastResultForStats && lastResultForStats.has(report.id)) {
+          let bf = bytes - lastResultForStats.get(report.id).bytesReceived
+          let hbf = headerBytes - lastResultForStats.get(report.id).headerBytesReceived
+          let pacf = packets - lastResultForStats.get(report.id).packetsReceived
+          let t = now - lastResultForStats.get(report.id).timestamp
+
+          const bitrate = (8 * bf / t).toFixed(2)
+          const headerrate = (8 * hbf / t).toFixed(2)
+          const packetrate = Math.floor(1000 * pacf / t)
+          otherUserList.value.find(v => v.userId === uid).bitrate = bitrate + 'kbps'
+          console.log(`${uid} ==> Bitrate ${bitrate} kbps, overhead ${headerrate} kbps, ${packetrate} packets/second`)
+        }
+        lastPeerStatsMap.set(uid, res)
+      }
+    })
+  })
 }
 
 </script>
