@@ -79,6 +79,12 @@ let isRunning = ref(false) // 控制视频流的暂停与继续接通
 let dialogVisible = ref(false)
 let streamParam = ref({})
 let StreamParamsComRef = ref(null)
+let rtcPcParams = {
+					iceTransportPolicy: 'relay', //强制走中继
+					iceServers: [
+						{url: 'turn:192.168.124.128:3478', username:'bia', credential:'bia1'},
+						]
+				}
 
 function getStreamPromise() {
   if(!pendPromise) {
@@ -186,7 +192,7 @@ async function initLocalStream() {
 
 async function initLocalRTC(localUid, remoteUid) {
   if(meetingUserMap.has(localUid + '-' + remoteUid)) return  
-  let lrtc = new RTCPeerConnection()
+  let lrtc = new RTCPeerConnection(rtcPcParams)
   console.log(lrtc)
   meetingUserMap.set(localUid + '-' + remoteUid, lrtc)
 
@@ -288,7 +294,7 @@ function setRemoteVideoStream(domId, track) {
 // 接到offer
 async function onRemoteOffer(fromUid, offer) {
     if(meetingUserMap.has(userId + '-' + fromUid)) return
-    let lrtc = new RTCPeerConnection()
+    let lrtc = new RTCPeerConnection(rtcPcParams)
 
     meetingUserMap.set(userId + '-' + fromUid, lrtc)
 
