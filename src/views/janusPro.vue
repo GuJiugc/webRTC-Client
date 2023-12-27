@@ -264,7 +264,7 @@ async function registerUser() {
   if (nickName.value == '') {
     return $msg('warning', '请输入昵称')
   }
-  mediaStream = await getShareSqeenStream()
+  // mediaStream = await getShareSqeenStream()
   var register = { request: "register", username: nickName.value };
   videoCallPluginHandle.send({ message: register });
 }
@@ -275,9 +275,8 @@ onMounted(() => {
 
 function call() {
   videoCallPluginHandle.createOffer({
-    media: mediaStream,
     // 双向语音视频加datachannel
-    track: [
+    tracks: [
       { type: 'audio', capture: true, recv: true },
       { type: 'video', capture: true, recv: true, simulcast: false },
       { type: 'data' },
