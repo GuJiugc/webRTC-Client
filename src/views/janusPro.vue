@@ -31,13 +31,12 @@ import { $msg } from '../utils/js/message.js'
 
 var localVideoRef = ref()
 var remoteVideoRef = ref()
-let mediaStream = null
 let targetUserName = ref('')
 let nickName = ref('')
 let log = console.log
 let janus = null
 let opaqueId = "videocall-" + Janus.randomString(12);
-let audioStatus = ref(true)
+let audioStatus = true
 let videoStatus = true
 
 function getShareSqeenStream() {
@@ -67,7 +66,7 @@ function initJanus() {
 
   log(opaqueId, 'opaqueId')
   janus = new Janus({
-    server: 'http://192.168.124.130:18088/janus',
+    server: 'http://127.0.0.1:18088/janus',
     apisecret: 'biasecret',
     success: function () {
       Janus.log("初始化成功")
@@ -171,11 +170,10 @@ function onMessageForVideoCall(msg, jsep) {
         let username = result["username"]
         log("来自" + username + "的呼叫")
         videoCallPluginHandle.createAnswer({
-          media: mediaStream,
           jsep: jsep,
           tracks: [
             { type: 'audio', capture: true, recv: true },
-            { type: 'video', capture: true, recv: true },
+            { type: 'screen', capture: true, recv: true },
             { type: 'data' },
           ],
           success: function(jsep) {
@@ -199,11 +197,10 @@ function onMessageForVideoCall(msg, jsep) {
             videoCallPluginHandle.handleRemoteJsep({jsep})
           }else {
             videoCallPluginHandle.createAnswer({
-            media: mediaStream,
             jsep: jsep,
             tracks: [
               { type: 'audio', capture: true, recv: true },
-              { type: 'video', capture: true, recv: true },
+              { type: 'screen', capture: true, recv: true },
               { type: 'data' },
             ],
             success: function(jsep) {
@@ -264,7 +261,6 @@ async function registerUser() {
   if (nickName.value == '') {
     return $msg('warning', '请输入昵称')
   }
-  // mediaStream = await getShareSqeenStream()
   var register = { request: "register", username: nickName.value };
   videoCallPluginHandle.send({ message: register });
 }
@@ -277,8 +273,7 @@ function call() {
   videoCallPluginHandle.createOffer({
     // 双向语音视频加datachannel
     tracks: [
-      { type: 'audio', capture: true, recv: true },
-      { type: 'video', capture: true, recv: true, simulcast: false },
+      { type: 'screen', capture: true, recv: true, simulcast: false },
       { type: 'data' },
     ],
     success: function (jsep) {

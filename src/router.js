@@ -4,6 +4,7 @@ import OneToMany from './views/OneToMany.vue'
 import OneToManyVirtual from './views/OneToManyVirtual.vue'
 import ManyToMany from './views/ManyToMany.vue'
 import JanusPro from './views/janusPro.vue'
+import JanusMeeting from './views/janusMeeting.vue'
 
 const routes = [
   { path: '/oneToOne', component: OneToOne },
@@ -11,6 +12,7 @@ const routes = [
   { path: '/OneToManyVirtual', component: OneToManyVirtual },
   { path: '/ManyToMany', component: ManyToMany },
   { path: '/JanusPro', component: JanusPro },
+  { path: '/JanusMeeting', component: JanusMeeting },
 ]
 
 const router = createRouter({
