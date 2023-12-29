@@ -24,7 +24,7 @@
       <div v-for="(item) in publisherList" :key="item.id">
         <div>{{ item.display }}</div>
         <video :id="item.id + 'Ref'" style="object-fit: fill;width: 500px;"></video>
-        <button @click="outPersonRequest(item.id)">踢</button>
+        <var-button type="primary" @click="outPersonRequest(item.id)">踢出房间</var-button>
       </div>
     </div>
   </div>
@@ -66,7 +66,7 @@ function initJanus() {
 
   log(opaqueId, 'opaqueId')
   janus = new Janus({
-    server: 'http://127.0.0.1:18088/janus',
+    server: 'http://192.168.124.130:18088/janus',
     apisecret: 'biasecret',
     success: function () {
       Janus.log("初始化成功")
@@ -195,6 +195,8 @@ function onMessageForVideoMeeting(msg, jsep) {
         }
       }else if(msg["error_code"]) {
         log(msg)
+      }else if(msg["kicked"]) {
+        publisherList.value = publisherList.value.filter(v => v.id != msg["kicked"])
       }
     break;
     default:
@@ -429,4 +431,7 @@ function publisherStream() {
   margin-top: 10px;
 }
 
+.var-button {
+  margin-right: 10px;
+}
 </style>
