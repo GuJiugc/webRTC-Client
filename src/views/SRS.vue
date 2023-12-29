@@ -1,10 +1,12 @@
 <template>
      <var-button @click="initRTC">推流</var-button>
+     <var-button @click="changeMedia">切换视频源</var-button>
 </template>
     
 <script setup>
 import { ref } from 'vue';
 import axios from 'axios';
+import { $msg } from '../utils/js/message';
 
 let log = console.log
 let pc = ref(null)
@@ -37,7 +39,7 @@ async function initRTC() {
 
     let offer = await pc.value.createOffer()
     await pc.value.setLocalDescription(offer)
-    sendSRSrequest('localstream', offer)
+    sendSRSrequest('localStream', offer)
 }
 
 function sendSRSrequest(streamId, offer) {
@@ -57,6 +59,26 @@ function sendSRSrequest(streamId, offer) {
     }).catch(err => {
         log(err)
     })
+}
+
+async function changeMedia() {
+    if(!pc.value) {
+        return $msg("warning", "请先推流！")
+    }
+    let replaceStream = await getLocalUserMedia()
+
+    for(const s of localStream.getTracks()) {
+        s.stop()
+    }
+
+    localStream = replaceStream
+    
+    const [videotrack] = replaceStream.getVideoTracks()
+
+    let sender = pc.value.getSenders()
+    let send = sender.find(s => s.track && s.track.kind === 'video')
+
+    send.replaceTrack(videotrack)
 }
 
 

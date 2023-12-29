@@ -6,6 +6,7 @@ import ManyToMany from './views/ManyToMany.vue'
 import JanusPro from './views/janusPro.vue'
 import JanusMeeting from './views/janusMeeting.vue'
 import SRS from './views/SRS.vue'
+import PullStream from './views/pullStream.vue'
 
 const routes = [
   { path: '/oneToOne', component: OneToOne },
@@ -15,6 +16,7 @@ const routes = [
   { path: '/JanusPro', component: JanusPro },
   { path: '/JanusMeeting', component: JanusMeeting },
   { path: '/SRS', component: SRS },
+  { path: '/PullStream', component: PullStream },
 ]
 
 const router = createRouter({
