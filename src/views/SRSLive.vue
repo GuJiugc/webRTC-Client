@@ -1,5 +1,5 @@
 <template>
-  <div class="SRSheader">SRS 会议</div>
+  <div class="SRSheader">SRS 直播</div>
   <div class="iptContainer">
     <div>
       <var-input placeholder="请输入昵称" v-model="nickName" clearable />
@@ -7,11 +7,15 @@
     <div>
       <var-input placeholder="请输入房间号" v-model="roomId" clearable />
     </div>
+    <var-radio-group v-model="userType">
+      <var-radio :checked-value="0">观众</var-radio>
+      <var-radio :checked-value="1">主播</var-radio>
+    </var-radio-group>
     <var-button style="margin-top: 10px; float: right" type="primary" @click="init"
       >加入房间</var-button
     >
   </div>
-  <div>
+  <div v-if="userType == 1">
     <div>本地</div>
     <video ref="localVideoRef" style="width: 500px"></video>
     <div>
@@ -20,10 +24,16 @@
       >
     </div>
   </div>
-  <div class="otherVideoContainer">
-    <div class="otherVideoItem" v-for="item in otherUserList" :key="item.userId">
-      <SRSMeetingPullStream :user="item" />
-    </div>
+  <div v-if="userType == 1">
+    <div>连麦画面</div>
+      <SRSMeetingPullStream v-if="applyMicUser.userId" :user="applyMicUser" />
+    <!-- <video ref="applyMicRef" style="width: 500px"></video> -->
+  </div>
+  <div class="liveRoom" v-if="userType == 0 && anchor">
+      <SRSMeetingPullStream :user="anchor" />
+      <div>
+        <var-button @click="applyMic" :loading="isLoading">申请连麦</var-button>
+      </div>
   </div>
 </template>
 
@@ -34,11 +44,14 @@ import { io } from 'socket.io-client'
 import { v4 as uuidv4 } from 'uuid'
 import SRSMeetingPullStream from '@/components/SRSMeetingPullStream.vue'
 import { $msg } from '../utils/js/message.js'
+import { Dialog } from '@varlet/ui'
+import { reactive } from 'vue'
 
 var log = console.log
 
 let nickName = ref('')
 let roomId = ref('')
+let userType = ref('')
 var userId = uuidv4()
 var ServerUrl = 'ws://localhost:18080'
 var socket = ref()
@@ -50,9 +63,10 @@ let srcServerRTCUrl = 'webrtc://127.0.0.1:1985/live/'
 let srcServerFlvUrl = 'http://127.0.0.1:1985/live/'
 let pc = ref(null)
 let localStream = null
+let isLoading = ref(false)
 
-const selfUserInfo = computed(() => {
-  return roomList.value.find((v) => v.userId === userId)
+const anchor = computed(() => {
+  return roomList.value.find((v) => v.userType == 1)
 })
 
 // 一个计算属性 ref
@@ -82,7 +96,8 @@ async function init() {
     query: {
       userId,
       roomId: roomId.value,
-      nickName: nickName.value
+      nickName: nickName.value,
+      userType: userType.value
     }
   })
 
@@ -94,13 +109,31 @@ async function init() {
     roomList.value = data
   })
 
-  socket.value.on('msg', (data) => {
+  socket.value.on('msg', async (data) => {
     if (data['type'] === 'join' || data['type'] === 'leave') {
       socket.value.emit('roomUserList', { roomId: roomId.value })
+    }else if(data["type"] === "applyMic") {
+      let t = await Dialog({
+        message: data.msg
+      })
+      if(t === "confirm") {
+        acceptMic(data.data)
+      }else{
+        refuseMic(data.data)
+      }
+    }else if(data["type"] === "refuseMic") {
+      // 拒绝连麦
+      handleRefuseMic(data.msg)
+    }else if(data["type"] === "acceptMic") {
+      // 接收连麦
+      handleAccessMic(data)
     }
   })
 
-  initRTCandPushStream()
+  // 是主播则推流
+  if(userType.value == 1) {
+    initRTCandPushStream()
+  }
 }
 
 async function initRTCandPushStream() {
@@ -171,6 +204,57 @@ async function changeMedia() {
 
   send.replaceTrack(videotrack)
 }
+
+// 申请连麦
+function applyMic() {
+  isLoading.value = true
+  socket.value.emit("applyMic", {
+    targetUid: anchor.value.userId,
+    applyUid: userId,
+    applyNickName: nickName.value
+  })
+}
+
+// 连麦人信息
+let applyMicUser = reactive({})
+
+// 接收连麦
+function acceptMic(data) {
+  socket.value.emit("acceptMic", { targetUid: data.applyUid, anchorId: userId, anchorNickname: nickName.value })
+  applyMicUser.userId = data.applyUid
+  applyMicUser.nickName = data.nickName
+}
+
+// 拒绝连麦
+function refuseMic(data) {
+  socket.value.emit("refuseMic", { targetUid: data.applyUid, anchorId: userId, anchorNickname: nickName.value })
+}
+
+// 观众端处理拒绝连麦
+function handleRefuseMic(msg) {
+  isLoading.value = false
+  $msg("warning", msg)
+}
+
+// 观众端接收到主播接受连麦
+async function handleAccessMic(data) {
+  isLoading.value = false
+  $msg("warning", data.msg)
+  log(data)
+  localStream = await getShareSqeenStream()
+  pc.value = new RTCPeerConnection()
+
+  pc.value.addTransceiver('audio', { direction: 'sendonly' })
+  pc.value.addTransceiver('video', { direction: 'sendonly' })
+
+  localStream.getTracks().forEach((track) => {
+    pc.value.addTrack(track)
+  })
+
+  let offer = await pc.value.createOffer()
+  await pc.value.setLocalDescription(offer)
+  sendSRSrequest(userId + 'video', offer)
+}
 </script>
 
 <style lang="less" scoped>
@@ -185,14 +269,7 @@ async function changeMedia() {
   overflow: hidden;
 }
 
-.otherVideoContainer {
-  display: flex;
-  justify-content: flex-start;
-  .otherVideoItem {
-    width: 620px;
-    margin: 10px;
-    border: 1px solid #ccc;
-    border-radius: 10px;
-  }
+.liveRoom {
+
 }
 </style>

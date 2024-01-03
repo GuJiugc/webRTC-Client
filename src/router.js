@@ -8,6 +8,7 @@ import JanusMeeting from './views/janusMeeting.vue'
 import SRS from './views/SRS.vue'
 import PullStream from './views/pullStream.vue'
 import SRSMeeting from './views/SRSMeeting.vue'
+import SRSLive from './views/SRSLive.vue'
 
 const routes = [
   { path: '/oneToOne', component: OneToOne },
@@ -19,6 +20,7 @@ const routes = [
   { path: '/SRS', component: SRS },
   { path: '/PullStream', component: PullStream },
   { path: '/SRSMeeting', component: SRSMeeting },
+  { path: '/SRSLive', component: SRSLive },
 ]
 
 const router = createRouter({
